@@ -49,5 +49,6 @@ jobs:
             echo "Decrypting: $encrypted_file"
 
             sops --decrypt "$encrypted_file" > "$decrypted_file"
+            rm $encrypted_file
             chmod 444 "$decrypted_file"
           done < <(find . -type f -name '*.enc' -print)
