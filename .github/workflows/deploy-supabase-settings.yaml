@@ -50,18 +50,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          mkdir -p "$APP_DIR"
-
           SOURCE_DIR="${{ github.workspace }}/supabase"
 
-          find "$SOURCE_DIR" -type f -print0 |
-          while IFS= read -r -d '' file; do
-              relative_path="${file#"$SOURCE_DIR"/}"
-              target="$APP_DIR/$relative_path"
-
-              mkdir -p "$(dirname "$target")"
-              ln -sfn "$(realpath "$file")" "$target"
+          mkdir -p "$APP_DIR"
+          for file in "$SOURCE_DIR"/*; do
+              ln -sfn "$(realpath "$file")" "$APP_DIR/$(basename "$file")"
           done
+
+          mkdir -p "$APP_DIR/volumes"
+          ln -sfn "$(realpath "$SOURCE_DIR/volumes/functions")" "$APP_DIR/volumes/functions"
 
       - name: Recreate services
         run: |
