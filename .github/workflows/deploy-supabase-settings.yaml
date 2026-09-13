@@ -59,7 +59,7 @@ jobs:
               ln -sfn "$(realpath "$file")" "$APP_DIR/$(basename "$file")"
           done
 
-          rsync -a \
+          rsync -a --delete \
             "$SOURCE_DIR/volumes/functions" \
             "$APP_DIR/volumes"
 
