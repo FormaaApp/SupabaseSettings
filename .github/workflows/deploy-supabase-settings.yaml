@@ -44,7 +44,7 @@ jobs:
             chmod 444 "$decrypted_file"
           done < <(find . -type f -name '*.enc' -print)
 
-          find "$APP_DIR" -xtype l -delete
+          find "$APP_DIR" -maxdepth 1 -xtype l -delete
 
       - name: Link supabase settings
         run: |

@@ -5,4 +5,4 @@ services:
       HTTPS_PROXY: http://xray:10808
       NO_PROXY: localhost,127.0.0.1,api-gw,db,auth,rest,storage,meta,realtime,supavisor
     env_file:
-      - env/.env.functions
+      - .env.functions
