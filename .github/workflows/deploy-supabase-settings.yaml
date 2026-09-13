@@ -49,6 +49,7 @@ jobs:
       - name: Link supabase settings
         run: |
           set -euo pipefail
+          shopt -s dotglob
 
           SOURCE_DIR="${{ github.workspace }}/supabase"
 
