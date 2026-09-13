@@ -29,7 +29,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          cd "${{ github.workspace }}/supabase"
+          cd "${{ github.workspace }}"
           if [[ ! -f .sops.yaml ]]; then
             echo "No .sops.yaml found, skipping decryption"
             exit 0
