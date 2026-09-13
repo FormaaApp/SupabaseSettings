@@ -55,3 +55,10 @@ jobs:
           for f in "${{ github.workspace }}"/supabase/*; do
               ln -sfn "$(realpath "$f")" "$APP_DIR/$(basename "$f")"
           done
+
+      - name: Recreate services
+        run: |
+          set -euo pipefail
+
+          cd "$APP_DIR"
+          sh run.sh recreate functions auth
