@@ -25,22 +25,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Link supabase settings
-        run: |
-          set -euo pipefail
-          shopt -s dotglob
-
-          mkdir -p "$APP_DIR"
-          for f in "${{ github.workspace }}"/supabase/*; do
-              ln -sfn "$(realpath "$f")" "$APP_DIR/$(basename "$f")"
-          done
-
       - name: Decrypt secrets
         run: |
           set -euo pipefail
 
-          cd "$APP_DIR"
-          if [[ ! -f "${{ github.workspace }}/.sops.yaml" ]]; then
+          cd "${{ github.workspace }}/supabase"
+          if [[ ! -f .sops.yaml ]]; then
             echo "No .sops.yaml found, skipping decryption"
             exit 0
           fi
@@ -50,5 +40,16 @@ jobs:
             echo "Decrypting: $encrypted_file"
 
             sops --decrypt "$encrypted_file" > "$decrypted_file"
+            rm "$encrypted_file"
             chmod 444 "$decrypted_file"
-          done < <(find -L . -type f -name '*.enc' -print)
+          done < <(find . -type f -name '*.enc' -print)
+
+      - name: Link supabase settings
+        run: |
+          set -euo pipefail
+          shopt -s dotglob
+
+          mkdir -p "$APP_DIR"
+          for f in "${{ github.workspace }}"/supabase/*; do
+              ln -sfn "$(realpath "$f")" "$APP_DIR/$(basename "$f")"
+          done
