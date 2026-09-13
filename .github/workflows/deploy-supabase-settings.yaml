@@ -61,7 +61,7 @@ jobs:
 
           rsync -a \
             "$SOURCE_DIR/volumes/functions" \
-            "$APP_DIR/volumes/"
+            "$APP_DIR/volumes"
 
       - name: Recreate services
         run: |
