@@ -29,10 +29,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          rsync -a --delete \
-            "${{ github.workspace }}/supabase/" \
-            "${{ github.workspace }}/migrations" \
-            "$APP_DIR/"
+          for f in ${{ github.event.repository.name }}/supabase/*; do
+              ln -sfn "$(realpath "$f")" "$APP_DIR/$(basename "$f")"
+          done
 
       - name: Decrypt secrets
         run: |
@@ -49,6 +48,5 @@ jobs:
             echo "Decrypting: $encrypted_file"
 
             sops --decrypt "$encrypted_file" > "$decrypted_file"
-            rm $encrypted_file
             chmod 444 "$decrypted_file"
           done < <(find . -type f -name '*.enc' -print)
