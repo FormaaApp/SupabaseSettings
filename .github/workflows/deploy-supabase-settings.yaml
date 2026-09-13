@@ -49,11 +49,18 @@ jobs:
       - name: Link supabase settings
         run: |
           set -euo pipefail
-          shopt -s dotglob
 
           mkdir -p "$APP_DIR"
-          for f in "${{ github.workspace }}"/supabase/*; do
-              ln -sfn "$(realpath "$f")" "$APP_DIR/$(basename "$f")"
+
+          SOURCE_DIR="${{ github.workspace }}/supabase"
+
+          find "$SOURCE_DIR" -type f -print0 |
+          while IFS= read -r -d '' file; do
+              relative_path="${file#"$SOURCE_DIR"/}"
+              target="$APP_DIR/$relative_path"
+
+              mkdir -p "$(dirname "$target")"
+              ln -sfn "$(realpath "$file")" "$target"
           done
 
       - name: Recreate services
