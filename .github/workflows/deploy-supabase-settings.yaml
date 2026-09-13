@@ -25,12 +25,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Copy supabase settings
+      - name: Link supabase settings
         run: |
           set -euo pipefail
+          shopt -s dotglob
 
           mkdir -p "$APP_DIR"
-          for f in ${{ github.workspace }}/supabase/*; do
+          for f in "${{ github.workspace }}"/supabase/*; do
               ln -sfn "$(realpath "$f")" "$APP_DIR/$(basename "$f")"
           done
 
