@@ -1,0 +1,5 @@
+# Environments
+.env*
+!.env.example
+!.env*.enc
+**/*.tmp.*

@@ -1,0 +1,5 @@
+creation_rules:
+  - path_regex: .+.enc$
+    age:
+      - age1tmn4t09cvsvlq89vx04gwrt2uyzap2dw00ntc7v52zt423dq39wsqw2kqg # local
+      - age1whdcg4sva4qp898kem7wh9nnahus0kpe48nx7rqzsxsd87l9dvyq0qt7gw # remote

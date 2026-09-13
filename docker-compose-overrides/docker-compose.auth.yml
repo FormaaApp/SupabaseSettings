@@ -1,0 +1,4 @@
+services:
+  auth:
+    env_file:
+      - env/.env.auth

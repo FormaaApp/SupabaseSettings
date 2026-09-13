@@ -1,0 +1,11 @@
+name: Deploy supabase settings
+
+on:
+  push:
+    branches:
+      - "main"
+
+  workflow_dispatch:
+
+jobs:
+  deploy:
