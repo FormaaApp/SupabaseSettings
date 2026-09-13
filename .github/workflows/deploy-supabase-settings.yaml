@@ -44,6 +44,8 @@ jobs:
             chmod 444 "$decrypted_file"
           done < <(find . -type f -name '*.enc' -print)
 
+          find "$APP_DIR" -xtype l -delete
+
       - name: Link supabase settings
         run: |
           set -euo pipefail
