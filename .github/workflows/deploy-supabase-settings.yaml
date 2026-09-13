@@ -20,7 +20,7 @@ jobs:
     runs-on: self-hosted
     steps:
       - name: Set app directory
-        run: echo "APP_DIR=$HOME/${{ github.event.repository.name }}" >> "$GITHUB_ENV"
+        run: echo "APP_DIR=$HOME/forma-test" >> "$GITHUB_ENV"
 
       - name: Checkout repository
         uses: actions/checkout@v4
