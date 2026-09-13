@@ -60,6 +60,10 @@ jobs:
           done
 
           mkdir -p "$APP_DIR/volumes"
+          if [[ -d "$APP_DIR/volumes/functions" && ! -L "$APP_DIR/volumes/functions" ]]; then
+            echo "Replacing directory with symlink: $APP_DIR/volumes/functions"
+            rm -rf -- "$APP_DIR/volumes/functions"
+          fi
           ln -sfn "$(realpath "$SOURCE_DIR/volumes/functions")" "$APP_DIR/volumes/functions"
 
       - name: Recreate services
