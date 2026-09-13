@@ -54,6 +54,7 @@ jobs:
 
           mkdir -p "$APP_DIR"
           for file in "$SOURCE_DIR"/*; do
+              [[ -f "$file" ]] || continue
               ln -sfn "$(realpath "$file")" "$APP_DIR/$(basename "$file")"
           done
 
