@@ -39,7 +39,7 @@ jobs:
           set -euo pipefail
 
           cd "$APP_DIR"
-          if [[ ! -f .sops.yaml ]]; then
+          if [[ ! -f "${{ github.workspace }}/.sops.yaml" ]]; then
             echo "No .sops.yaml found, skipping decryption"
             exit 0
           fi
