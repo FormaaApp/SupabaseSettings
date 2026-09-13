@@ -7,5 +7,47 @@ on:
 
   workflow_dispatch:
 
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
   deploy:
+    name: Deploy supabase settings
+    runs-on: self-hosted
+    steps:
+      - name: Set app directory
+        run: echo "APP_DIR=$HOME/${{ github.event.repository.name }}" >> "$GITHUB_ENV"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Copy supabase settings
+        run: |
+          set -euo pipefail
+
+          rsync -a --delete \
+            "${{ github.workspace }}/supabase" \
+            "${{ github.workspace }}/migrations" \
+            "$APP_DIR/"
+
+      - name: Decrypt secrets
+        run: |
+          set -euo pipefail
+
+          cd "$APP_DIR"
+          if [[ ! -f .sops.yaml ]]; then
+            echo "No .sops.yaml found, skipping decryption"
+            exit 0
+          fi
+          while IFS= read -r encrypted_file; do
+            decrypted_file="${encrypted_file%.enc}"
+
+            echo "Decrypting: $encrypted_file"
+
+            sops --decrypt "$encrypted_file" > "$decrypted_file"
+            chmod 444 "$decrypted_file"
+          done < <(find . -type f -name '*.enc' -print)
