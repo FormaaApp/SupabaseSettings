@@ -81,16 +81,17 @@ async function getYandexIamToken(): Promise<string> {
 
 interface PlaybackPayload {
   video_row_id: string
-  // "athlete" — workout_videos (видео ученика на проверку, см.
-  // 138_yandex_video_workout_videos_column.sql); по умолчанию "technique"
+  // "athlete" — workout_videos; "library" — coach_exercise_library_videos
+  // (140_yandex_video_library_column.sql); по умолчанию "technique"
   // (workout_exercise_technique_videos) — для обратной совместимости со
   // старыми вызовами приложения, которые это поле ещё не отправляют.
-  kind?: "technique" | "athlete"
+  kind?: "technique" | "athlete" | "library"
 }
 
 const TABLE_BY_KIND: Record<string, string> = {
   technique: "workout_exercise_technique_videos",
   athlete: "workout_videos",
+  library: "coach_exercise_library_videos",
 }
 
 Deno.serve(async (req) => {
@@ -173,4 +174,3 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: String(e) }), { status: 500 })
   }
 })
-
