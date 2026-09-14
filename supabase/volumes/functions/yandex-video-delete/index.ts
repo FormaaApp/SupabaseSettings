@@ -79,14 +79,16 @@ async function getYandexIamToken(): Promise<string> {
 
 interface DeletePayload {
   video_row_id: string
-  // "athlete" — workout_videos; по умолчанию "technique"
-  // (workout_exercise_technique_videos), см. yandex-video-playback-url.
-  kind?: "technique" | "athlete"
+  // "athlete" — workout_videos; "library" — coach_exercise_library_videos;
+  // по умолчанию "technique" (workout_exercise_technique_videos), см.
+  // yandex-video-playback-url.
+  kind?: "technique" | "athlete" | "library"
 }
 
 const TABLE_BY_KIND: Record<string, string> = {
   technique: "workout_exercise_technique_videos",
   athlete: "workout_videos",
+  library: "coach_exercise_library_videos",
 }
 
 Deno.serve(async (req) => {
@@ -153,4 +155,3 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: String(e) }), { status: 500 })
   }
 })
-
