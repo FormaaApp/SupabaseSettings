@@ -13,11 +13,12 @@
 // (WorkoutService.deleteTechniqueVideo), функция только чистит внешний
 // ресурс на Yandex.
 //
-// Настройка: как у yandex-video-register — "Enforce JWT Verification"
-// включена, те же секреты YANDEX_SERVICE_ACCOUNT_ID/YANDEX_KEY_ID/
-// YANDEX_PRIVATE_KEY (IAM-обмен продублирован здесь по тому же принципу,
-// что и в остальных функциях пилота — общий код между self-host Edge
-// Functions не шарится без своей сборки).
+// Настройка: как у yandex-video-register (см. её же комментарий про
+// FUNCTIONS_VERIFY_JWT/self-hosted edge-runtime), те же секреты
+// YANDEX_SERVICE_ACCOUNT_ID/YANDEX_KEY_ID/YANDEX_PRIVATE_KEY (IAM-обмен
+// продублирован здесь по тому же принципу, что и в остальных функциях
+// пилота — общий код между self-host Edge Functions не шарится без своей
+// сборки).
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
@@ -91,6 +92,18 @@ const TABLE_BY_KIND: Record<string, string> = {
   library: "coach_exercise_library_videos",
 }
 
+// "Копия" видео техники/медиатеки на Yandex — НЕ физическое дублирование
+// (WorkoutService.copyTechniqueVideo / CoachExerciseLibraryService.copyVideoIntoLibrary
+// для yandex-источника просто вставляют новую строку с ТЕМ ЖЕ yandex_video_id
+// — сам ролик на Yandex один на любое число строк). Значит одно и то же
+// video_row_id может быть не единственной строкой, ссылающейся на этот
+// yandex_video_id: удаление из медиатеки после раздачи по ученикам (propagate)
+// иначе удаляло бы видео и на Yandex, ломая воспроизведение у всех, кому оно
+// уже было скопировано. athlete-видео в эту цепочку копирования не попадают
+// (отдельный, несвязанный путь загрузки), но проверяем все три таблицы —
+// дёшево, а защищает и от будущих путей копирования тоже.
+const KIND_TABLES = Object.values(TABLE_BY_KIND)
+
 Deno.serve(async (req) => {
   try {
     const authHeader = req.headers.get("Authorization")
@@ -127,27 +140,44 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: "Not found or not a Yandex-backed video" }), { status: 404 })
     }
 
-    const iamToken = await getYandexIamToken()
+    // Считаем, сколько строк во ВСЕХ трёх таблицах ссылаются на этот же
+    // yandex_video_id (включая саму удаляемую) — если больше одной, ролик
+    // ещё нужен кому-то ещё (скопирован в другое упражнение/ученику через
+    // propagate), удалять его с Yandex нельзя, только эту строку в БД
+    // (это по-прежнему делает клиент отдельным вызовом).
+    let totalRefs = 0
+    for (const t of KIND_TABLES) {
+      const { count } = await userClient
+        .from(t)
+        .select("id", { count: "exact", head: true })
+        .eq("yandex_video_id", yandexVideoId)
+      totalRefs += count ?? 0
+    }
+    const stillShared = totalRefs > 1
 
-    // Подтверждено вживую (2026-09-12, тестовые регистрации): операция
-    // называется просто DELETE /video/v1/videos/{id}, без отдельного
-    // ":action" в пути — в отличие от generateDownloadURL.
-    const deleteResponse = await fetch(
-      `https://video.api.cloud.yandex.net/video/v1/videos/${yandexVideoId}`,
-      { method: "DELETE", headers: { "Authorization": `Bearer ${iamToken}` } }
-    )
-    // 404 здесь — не ошибка вызывающего: видео на Yandex уже могло быть
-    // удалено раньше (повторный вызов, гонка) — трактуем как успех, а не
-    // как повод не дать клиенту завершить удаление строки в БД.
-    if (!deleteResponse.ok && deleteResponse.status !== 404) {
-      const deleteData = await deleteResponse.text()
-      return new Response(
-        JSON.stringify({ error: `Yandex video deletion failed: ${deleteData}` }),
-        { status: 502 }
+    if (!stillShared) {
+      const iamToken = await getYandexIamToken()
+
+      // Подтверждено вживую (2026-09-12, тестовые регистрации): операция
+      // называется просто DELETE /video/v1/videos/{id}, без отдельного
+      // ":action" в пути — в отличие от generateDownloadURL.
+      const deleteResponse = await fetch(
+        `https://video.api.cloud.yandex.net/video/v1/videos/${yandexVideoId}`,
+        { method: "DELETE", headers: { "Authorization": `Bearer ${iamToken}` } }
       )
+      // 404 здесь — не ошибка вызывающего: видео на Yandex уже могло быть
+      // удалено раньше (повторный вызов, гонка) — трактуем как успех, а не
+      // как повод не дать клиенту завершить удаление строки в БД.
+      if (!deleteResponse.ok && deleteResponse.status !== 404) {
+        const deleteData = await deleteResponse.text()
+        return new Response(
+          JSON.stringify({ error: `Yandex video deletion failed: ${deleteData}` }),
+          { status: 502 }
+        )
+      }
     }
 
-    return new Response(JSON.stringify({ deleted: true }), {
+    return new Response(JSON.stringify({ deleted: true, sharedElsewhere: stillShared }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     })
