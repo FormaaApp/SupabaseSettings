@@ -15,12 +15,18 @@
 // пропустит (не твой ученик/не твоя самотренировка) — запрос вернёт 0
 // строк, и мы откажем, ничего не дублируя руками.
 //
-// Настройка (Supabase Dashboard -> Edge Functions -> "yandex-video-register"):
-// 1. Deploy этот файл как есть.
-// 2. "Enforce JWT Verification" — ВКЛЮЧЕНА (в отличие от send-push): эту
-//    функцию вызывает сам пользователь из приложения со своим JWT, не
-//    внутренний триггер.
-// 3. Secrets:
+// Настройка — деплой копированием файла в volumes/functions/ + docker
+// compose restart functions (см. self-host/deploy_functions.sh), а не
+// через Dashboard/CLI: отдельного переключателя "Enforce JWT Verification"
+// на функцию тут нет — у self-hosted edge-runtime это ОДНА общая настройка
+// на весь контейнер functions (переменная FUNCTIONS_VERIFY_JWT в .env
+// проекта), а не per-function. Она почти наверняка уже стоит в false —
+// иначе send-push (вызывается серверным триггером без JWT, см. его же
+// комментарий) вообще не работал бы. Поэтому проверку JWT эта функция
+// делает САМА в коде ниже (authHeader + userClient.auth.getUser()) —
+// именно эта проверка и есть реальная защита, а не внешний тумблер.
+// Ничего дополнительно включать не нужно — просто задеплой файл как есть.
+// Secrets:
 //    - YANDEX_SERVICE_ACCOUNT_ID, YANDEX_KEY_ID, YANDEX_PRIVATE_KEY —
 //      три поля из JSON-ключа сервисного аккаунта (`service_account_id`,
 //      `id`, `private_key`), см. README self-host / инструкцию перехода.
@@ -206,4 +212,3 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: String(e) }), { status: 500 })
   }
 })
-
