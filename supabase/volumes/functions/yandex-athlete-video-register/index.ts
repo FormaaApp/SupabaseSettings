@@ -21,11 +21,13 @@
 // обычный SELECT через userClient (RLS workout_exercises), не отдельная
 // проверка руками.
 //
-// Настройка (Supabase Dashboard -> Edge Functions -> "yandex-athlete-video-register"):
-// 1. Deploy этот файл как есть.
-// 2. "Enforce JWT Verification" — ВКЛЮЧЕНА, как у остальных функций пилота.
-// 3. Secrets — те же четыре YANDEX_*, что и у остальных функций пилота
-//    (уже настроены, если yandex-video-register уже деплоился).
+// Настройка — деплой копированием файла (см. self-host/deploy_functions.sh),
+// без отдельного переключателя JWT: у self-hosted edge-runtime это одна
+// общая настройка на весь контейнер functions (FUNCTIONS_VERIFY_JWT в
+// .env), не per-function — см. подробное объяснение в yandex-video-register/index.ts.
+// Проверка JWT — в коде этой функции ниже (authHeader + userClient.auth.getUser()).
+// Secrets — те же четыре YANDEX_*, что и у остальных функций пилота
+// (уже настроены, если yandex-video-register уже деплоился).
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
