@@ -53,7 +53,7 @@ jobs:
           find "$APP_DIR" -maxdepth 1 -xtype l -delete
 
       - name: Link supabase settings
-        if: github.event_name != 'pull_request'
+        if: github.ref_name != github.event.repository.default_branch
         run: |
           set -euo pipefail
           shopt -s dotglob
@@ -71,7 +71,7 @@ jobs:
             "$APP_DIR/volumes"
 
       - name: Recreate services
-        if: github.event_name != 'pull_request'
+        if: github.ref_name != github.event.repository.default_branch
         run: |
           set -euo pipefail
 
@@ -89,7 +89,7 @@ jobs:
           echo "Checking migrations with dry-run..."
           supabase db push --db-url "$SUPABASE_DB_URL" --dry-run
 
-          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+          if [[ "${{ github.ref_name }}" == "${{ github.event.repository.default_branch }}" ]]; then
             echo "Applying migrations..."
             supabase db push --db-url "$SUPABASE_DB_URL"
           else
