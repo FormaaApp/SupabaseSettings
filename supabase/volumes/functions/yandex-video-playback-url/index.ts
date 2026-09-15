@@ -9,12 +9,14 @@
 // workout_exercise_technique_videos эту строку не отдаёт (ученик смотрит
 // не свою тренировку и т.п.), запрос вернёт 0 строк, отказываем.
 //
-// Настройка: как у yandex-video-register — "Enforce JWT Verification"
-// включена, те же секреты YANDEX_SERVICE_ACCOUNT_ID/YANDEX_KEY_ID/
-// YANDEX_PRIVATE_KEY (IAM-обмен продублирован здесь — та же логика, что
-// в yandex-video-register, но это отдельно деплоящаяся функция, общий
-// код между self-host Edge Functions не шарится без своей сборки, тот же
-// подход, что и у остальных функций в этом проекте).
+// Настройка: как у yandex-video-register (см. её же комментарий про
+// FUNCTIONS_VERIFY_JWT — self-hosted edge-runtime не поддерживает
+// per-function переключатель, проверка JWT — в коде функции ниже), те же
+// секреты YANDEX_SERVICE_ACCOUNT_ID/YANDEX_KEY_ID/YANDEX_PRIVATE_KEY
+// (IAM-обмен продублирован здесь — та же логика, что в yandex-video-register,
+// но это отдельно деплоящаяся функция, общий код между self-host Edge
+// Functions не шарится без своей сборки, тот же подход, что и у остальных
+// функций в этом проекте).
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
@@ -94,6 +96,12 @@ const TABLE_BY_KIND: Record<string, string> = {
   library: "coach_exercise_library_videos",
 }
 
+// НАЙДЕНО (2026-09-15): выяснилось, что деплой на self-host вообще не
+// принимал изменения — то, что тестировалось всё это время как "с HLS
+// сломано", реально работало на СТАРОМ коде (без HLS), деплой просто не
+// доезжал. Ложная тревога отменяется, включаем обратно и проверяем по-настоящему.
+const HLS_ENABLED = true
+
 Deno.serve(async (req) => {
   try {
     const authHeader = req.headers.get("Authorization")
@@ -133,18 +141,56 @@ Deno.serve(async (req) => {
 
     const iamToken = await getYandexIamToken()
 
-    // Операция называется generateDownloadURL (заглавный URL в конце) —
-    // подтверждено. Ответ — "операция" ({done, response: {downloadUrl}}).
-    // ПОДТВЕРЖДЕНО ВЖИВУЮ (2026-09-13, реальное видео): downloadUrl отдаёт
-    // валидный MP4 (curl + `file` подтвердили ISO Media контейнер), но
-    // сервер возвращает "Content-Type: application/octet-stream" и путь
-    // без расширения — из-за этого AVPlayer/AVURLAsset на клиенте не мог
-    // сам определить тип контейнера и считал isPlayable=false, хотя байты
-    // были полностью нормальным видео. Исправлено на клиенте
-    // (AVURLAssetOverrideMIMETypeKey, см. FullScreenTechniqueVideoView) —
-    // здесь менять нечего, отдельный SDK-плеер (YandexCloudVideoPlayerView)
-    // в итоге не понадобился, обычный AVPlayer справляется с downloadUrl
-    // как есть.
+    // Адаптивный HLS вместо скачивания файла целиком (см. отчёт "Видеопайплайн
+    // Forma", 2026-09-15) — Yandex Cloud Video уже транскодирует загруженное
+    // видео в несколько битрейтов и раздаёт его сегментами через CDN, этим
+    // просто не пользовались: раньше здесь всегда стоял generateDownloadURL
+    // (весь файл целиком), из-за чего клиент ждал полную закачку файла перед
+    // воспроизведением. GET .../:getManifests — не POST, в отличие от
+    // generateDownloadURL/delete, подтверждено по REST-биндингу в proto.
+    //
+    // ВАЖНО (та же документация): манифест нельзя кэшировать — плеер обязан
+    // запрашивать свежий на каждый повторный показ. Поэтому is_stream=true
+    // ниже — сигнал клиенту никогда не сохранять этот URL на диск (см.
+    // FullScreenTechniqueVideoView), только создавать AVPlayer прямо по нему.
+    // НАЙДЕНО (аудит, 2026-09-15): .json() ниже раньше ничем не был защищён —
+    // сбойный ответ Yandex (502/503, пустое тело при обрыве) не всегда JSON,
+    // .json() в этом случае кидает исключение, которое ловил только внешний
+    // catch функции — клиент получал голый 500 вместо отката на
+    // generateDownloadURL ниже, хотя фолбэк для этого и существует. Теперь
+    // любой сбой именно на этом шаге (сеть, парсинг) трактуется как "манифест
+    // пока недоступен" и просто проваливается в фолбэк, а не рвёт всю функцию.
+    let hlsManifest: { url?: string; type?: string } | undefined
+    if (HLS_ENABLED) {
+      try {
+        const manifestsResponse = await fetch(
+          `https://video.api.cloud.yandex.net/video/v1/videos/${yandexVideoId}:getManifests`,
+          { headers: { "Authorization": `Bearer ${iamToken}` } }
+        )
+        const manifestsData = await manifestsResponse.json()
+        const manifests: { url?: string; type?: string }[] = manifestsData.response?.manifests ?? manifestsData.manifests ?? []
+        if (manifestsResponse.ok) {
+          hlsManifest = manifests.find((m) => m.type === "HLS" && m.url)
+        }
+      } catch {
+        // Фолбэк ниже сам решит, что делать — намеренно не пробрасываем.
+      }
+    }
+
+    if (hlsManifest?.url) {
+      return new Response(JSON.stringify({ playback_url: hlsManifest.url, is_stream: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })
+    }
+
+    // Фолбэк — видео ещё не успело оттранскодироваться (только что залито)
+    // или манифесты почему-то недоступны: старое поведение, ссылка на
+    // исходный файл целиком. ПОДТВЕРЖДЕНО ВЖИВУЮ (2026-09-13, реальное
+    // видео): downloadUrl отдаёт валидный MP4 (curl + `file` подтвердили
+    // ISO Media контейнер), но сервер возвращает "Content-Type:
+    // application/octet-stream" и путь без расширения — клиент форсирует
+    // MIME сам (AVURLAssetOverrideMIMETypeKey), только когда is_stream=false.
     const downloadResponse = await fetch(
       `https://video.api.cloud.yandex.net/video/v1/videos/${yandexVideoId}:generateDownloadURL`,
       {
@@ -161,12 +207,12 @@ Deno.serve(async (req) => {
       downloadData.response?.downloadUrl ?? downloadData.downloadUrl ?? downloadData.url
     if (!downloadResponse.ok || !playbackUrl) {
       return new Response(
-        JSON.stringify({ error: `Yandex download URL generation failed: ${JSON.stringify(downloadData)}` }),
+        JSON.stringify({ error: `Yandex playback URL generation failed: ${JSON.stringify(downloadData)}` }),
         { status: 502 }
       )
     }
 
-    return new Response(JSON.stringify({ playback_url: playbackUrl }), {
+    return new Response(JSON.stringify({ playback_url: playbackUrl, is_stream: false }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     })
