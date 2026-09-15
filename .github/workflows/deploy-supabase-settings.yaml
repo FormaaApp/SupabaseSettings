@@ -7,6 +7,10 @@ on:
     paths:
       - "supabase/**"
       - "migrations/**"
+  pull_request:
+    paths:
+      - "supabase/**"
+      - "migrations/**"
 
   workflow_dispatch:
 
@@ -32,7 +36,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          cd "${{ github.workspace }}"
           if [[ ! -f .sops.yaml ]]; then
             echo "No .sops.yaml found, skipping decryption"
             exit 0
@@ -50,6 +53,7 @@ jobs:
           find "$APP_DIR" -maxdepth 1 -xtype l -delete
 
       - name: Link supabase settings
+        if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
           shopt -s dotglob
@@ -67,8 +71,27 @@ jobs:
             "$APP_DIR/volumes"
 
       - name: Recreate services
+        if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
 
           cd "$APP_DIR"
           sh run.sh recreate functions auth
+
+      - name: Apply supabase migrations
+        run: |
+          set -euo pipefail
+          source .env
+          export POSTGRES_PASSWORD POOLER_TENANT_ID POSTGRES_DB
+
+          SUPABASE_DB_URL="postgresql://postgres.${POOLER_TENANT_ID}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}"
+
+          echo "Checking migrations with dry-run..."
+          supabase db push --db-url "$SUPABASE_DB_URL" --dry-run
+
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "Applying migrations..."
+            supabase db push --db-url "$SUPABASE_DB_URL"
+          else
+            echo "Skip applying migrations..."
+          fi
