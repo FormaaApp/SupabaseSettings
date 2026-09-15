@@ -81,7 +81,7 @@ jobs:
       - name: Apply supabase migrations
         run: |
           set -euo pipefail
-          source .env
+          source supabase/.env
           export POSTGRES_PASSWORD POOLER_TENANT_ID POSTGRES_DB
 
           SUPABASE_DB_URL="postgresql://postgres.${POOLER_TENANT_ID}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}"
