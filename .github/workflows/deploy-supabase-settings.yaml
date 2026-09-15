@@ -84,7 +84,7 @@ jobs:
           source supabase/.env
           export POSTGRES_PASSWORD POOLER_TENANT_ID POSTGRES_DB
 
-          SUPABASE_DB_URL="postgresql://postgres.${POOLER_TENANT_ID}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}"
+          SUPABASE_DB_URL="postgresql://postgres.${POOLER_TENANT_ID}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}?sslmode=disable"
 
           echo "Checking migrations with dry-run..."
           supabase db push --db-url "$SUPABASE_DB_URL" --dry-run
