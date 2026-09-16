@@ -1,0 +1,214 @@
+// Supabase Edge Function: удаляет видео из Yandex Cloud Video при удалении
+// самой строки (или явном удалении видео пользователем) — без этого вызова
+// строка в workout_exercise_technique_videos пропадает, а сам видеофайл
+// остаётся висеть на канале Yandex НАВСЕГДА и продолжает тарифицироваться
+// (хранение — 0,0033 ₽/ГБ в час, копейки за штуку, но без чистки растёт
+// бесконечно на каждое удалённое упражнение/видео). ПИЛОТ — только видео
+// техники, см. 137_yandex_video_pilot_column.sql.
+//
+// Права — тем же принципом, что и у остальных функций пилота: проверяем
+// через userClient (JWT вызывающего), не через service_role — если RLS
+// workout_exercise_technique_videos эту строку не отдаёт, отказываем. Строку
+// в БД теперь удаляет и сама функция (сразу после решения об удалении на
+// Yandex, той же RLS) — сужает окно гонки с параллельным copy/propagate
+// (см. НАЙДЕНО ниже). Клиент (WorkoutService.deleteTechniqueVideo и др.)
+// по-прежнему делает свой .delete() следом — страховка на случай, если эта
+// функция недоступна, не лишняя работа.
+//
+// Настройка: как у yandex-video-register (см. её же комментарий про
+// FUNCTIONS_VERIFY_JWT/self-hosted edge-runtime), те же секреты
+// YANDEX_SERVICE_ACCOUNT_ID/YANDEX_KEY_ID/YANDEX_PRIVATE_KEY (IAM-обмен
+// продублирован здесь по тому же принципу, что и в остальных функциях
+// пилота — общий код между self-host Edge Functions не шарится без своей
+// сборки).
+
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+
+function base64url(data: Uint8Array): string {
+  let str = ""
+  for (const byte of data) str += String.fromCharCode(byte)
+  return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+}
+
+async function importYandexPrivateKey(pem: string): Promise<CryptoKey> {
+  const match = pem.match(/-----BEGIN PRIVATE KEY-----([\s\S]*?)-----END PRIVATE KEY-----/)
+  if (!match) {
+    throw new Error("YANDEX_PRIVATE_KEY: PEM markers not found")
+  }
+  const raw = Uint8Array.from(atob(match[1].replace(/\s+/g, "")), (c) => c.charCodeAt(0))
+  return crypto.subtle.importKey("pkcs8", raw, { name: "RSA-PSS", hash: "SHA-256" }, false, ["sign"])
+}
+
+let cachedIamToken: { token: string; expiresAt: number } | null = null
+
+async function getYandexIamToken(): Promise<string> {
+  const now = Math.floor(Date.now() / 1000)
+  if (cachedIamToken && cachedIamToken.expiresAt > now + 60) {
+    return cachedIamToken.token
+  }
+
+  const serviceAccountId = Deno.env.get("YANDEX_SERVICE_ACCOUNT_ID")
+  const keyId = Deno.env.get("YANDEX_KEY_ID")
+  const privateKeyPem = Deno.env.get("YANDEX_PRIVATE_KEY")
+  if (!serviceAccountId || !keyId || !privateKeyPem) {
+    throw new Error("Yandex service account secrets not configured")
+  }
+
+  const header = base64url(new TextEncoder().encode(JSON.stringify({ alg: "PS256", kid: keyId, typ: "JWT" })))
+  const claims = base64url(new TextEncoder().encode(JSON.stringify({
+    iss: serviceAccountId,
+    aud: "https://iam.api.cloud.yandex.net/iam/v1/tokens",
+    iat: now,
+    exp: now + 3600,
+  })))
+  const signingInput = `${header}.${claims}`
+  const key = await importYandexPrivateKey(privateKeyPem)
+  const signature = await crypto.subtle.sign({ name: "RSA-PSS", saltLength: 32 }, key, new TextEncoder().encode(signingInput))
+  const jwt = `${signingInput}.${base64url(new Uint8Array(signature))}`
+
+  const response = await fetch("https://iam.api.cloud.yandex.net/iam/v1/tokens", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jwt }),
+  })
+  const data = await response.json()
+  const token: string | undefined = data.iamToken ?? data.iam_token
+  if (!response.ok || !token) {
+    throw new Error(`Yandex IAM token exchange failed: ${JSON.stringify(data)}`)
+  }
+  cachedIamToken = { token, expiresAt: now + 3600 }
+  return token
+}
+
+interface DeletePayload {
+  video_row_id: string
+  // "athlete" — workout_videos; "library" — coach_exercise_library_videos;
+  // по умолчанию "technique" (workout_exercise_technique_videos), см.
+  // yandex-video-playback-url.
+  kind?: "technique" | "athlete" | "library"
+}
+
+const TABLE_BY_KIND: Record<string, string> = {
+  technique: "workout_exercise_technique_videos",
+  athlete: "workout_videos",
+  library: "coach_exercise_library_videos",
+}
+
+// "Копия" видео техники/медиатеки на Yandex — НЕ физическое дублирование
+// (WorkoutService.copyTechniqueVideo / CoachExerciseLibraryService.copyVideoIntoLibrary
+// для yandex-источника просто вставляют новую строку с ТЕМ ЖЕ yandex_video_id
+// — сам ролик на Yandex один на любое число строк). Значит одно и то же
+// video_row_id может быть не единственной строкой, ссылающейся на этот
+// yandex_video_id: удаление из медиатеки после раздачи по ученикам (propagate)
+// иначе удаляло бы видео и на Yandex, ломая воспроизведение у всех, кому оно
+// уже было скопировано. athlete-видео в эту цепочку копирования не попадают
+// (отдельный, несвязанный путь загрузки), но проверяем все три таблицы —
+// дёшево, а защищает и от будущих путей копирования тоже.
+const KIND_TABLES = Object.values(TABLE_BY_KIND)
+
+Deno.serve(async (req) => {
+  try {
+    const authHeader = req.headers.get("Authorization")
+    if (!authHeader) {
+      return new Response(JSON.stringify({ error: "No authorization header" }), { status: 401 })
+    }
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!
+    const userClient = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: authHeader } },
+    })
+
+    const { data: { user }, error: userError } = await userClient.auth.getUser()
+    if (userError || !user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 })
+    }
+
+    const { video_row_id, kind } = (await req.json()) as DeletePayload
+    if (!video_row_id) {
+      return new Response(JSON.stringify({ error: "Missing video_row_id" }), { status: 400 })
+    }
+    const table = TABLE_BY_KIND[kind ?? "technique"]
+
+    // RLS нужной таблицы решает, видно ли вообще эту строку вызывающему —
+    // тот же принцип, что и у yandex-video-playback-url.
+    const { data: videoRows, error: videoError } = await userClient
+      .from(table)
+      .select("yandex_video_id")
+      .eq("id", video_row_id)
+      .limit(1)
+    const yandexVideoId = videoRows?.[0]?.yandex_video_id as string | undefined
+    if (videoError || !yandexVideoId) {
+      return new Response(JSON.stringify({ error: "Not found or not a Yandex-backed video" }), { status: 404 })
+    }
+
+    // Считаем, сколько строк во ВСЕХ трёх таблицах ссылаются на этот же
+    // yandex_video_id (включая саму удаляемую) — если больше одной, ролик
+    // ещё нужен кому-то ещё (скопирован в другое упражнение/ученику через
+    // propagate), удалять его с Yandex нельзя, только эту строку в БД (см.
+    // ниже).
+    let totalRefs = 0
+    for (const t of KIND_TABLES) {
+      const { count } = await userClient
+        .from(t)
+        .select("id", { count: "exact", head: true })
+        .eq("yandex_video_id", yandexVideoId)
+      totalRefs += count ?? 0
+    }
+    const stillShared = totalRefs > 1
+
+    if (!stillShared) {
+      const iamToken = await getYandexIamToken()
+
+      // Подтверждено вживую (2026-09-12, тестовые регистрации): операция
+      // называется просто DELETE /video/v1/videos/{id}, без отдельного
+      // ":action" в пути — в отличие от generateDownloadURL.
+      const deleteResponse = await fetch(
+        `https://video.api.cloud.yandex.net/video/v1/videos/${yandexVideoId}`,
+        { method: "DELETE", headers: { "Authorization": `Bearer ${iamToken}` } }
+      )
+      // 404 здесь — не ошибка вызывающего: видео на Yandex уже могло быть
+      // удалено раньше (повторный вызов, гонка) — трактуем как успех, а не
+      // как повод не дать клиенту завершить удаление строки в БД.
+      if (!deleteResponse.ok && deleteResponse.status !== 404) {
+        const deleteData = await deleteResponse.text()
+        return new Response(
+          JSON.stringify({ error: `Yandex video deletion failed: ${deleteData}` }),
+          { status: 502 }
+        )
+      }
+    }
+
+    // НАЙДЕНО при аудите бэкенда (2026-09-16): раньше строку в БД удалял
+    // только клиент, ОТДЕЛЬНЫМ вызовом уже после ответа этой функции — то
+    // есть между подсчётом ссылок здесь и фактическим исчезновением строки
+    // был ещё и сетевой round-trip до клиента и обратно, а не только само
+    // время выполнения этой функции. Параллельная вставка новой ссылки на
+    // тот же yandex_video_id (copy/propagate) могла попасть ровно в это
+    // окно. Удаляем строку сразу здесь же — тем же userClient (та же RLS,
+    // что уже проверила видимость строки выше), а не расширяя проверку прав
+    // сервисным ключом. Клиент по-прежнему делает свой .delete() следом
+    // (см. WorkoutService.deleteTechniqueVideo и др.) — это не лишняя
+    // работа, а страховка: если сама эта функция недоступна/упала раньше
+    // (сеть), клиентский вызов всё равно есть, просто уже без этой защиты.
+    // Полностью гонку с параллельным copy/propagate это не убирает (внешний
+    // HTTP-вызов к Yandex нельзя завернуть в одну транзакцию с подсчётом),
+    // но убирает самый широкий и самый вероятный кусок окна.
+    const { error: rowDeleteError } = await userClient.from(table).delete().eq("id", video_row_id)
+    if (rowDeleteError) {
+      // Не 502 — сам Yandex-ресурс (если удалялся) уже обработан корректно,
+      // а строку клиент всё равно уберёт следом своим отдельным вызовом.
+      return new Response(
+        JSON.stringify({ deleted: true, sharedElsewhere: stillShared, rowDeleteError: rowDeleteError.message }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    }
+
+    return new Response(JSON.stringify({ deleted: true, sharedElsewhere: stillShared }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })
+  } catch (e) {
+    return new Response(JSON.stringify({ error: String(e) }), { status: 500 })
+  }
+})
